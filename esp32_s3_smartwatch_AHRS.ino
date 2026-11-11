@@ -29,6 +29,8 @@
 #define ROLL_CIRCLE_RAD 80
 #define ROLL_PNTR_LEN   15
 
+#define DEF_RUNG_WIDTH 200
+
 
 // Create QMI8658 instance
 QMI8658 imu;
@@ -67,7 +69,7 @@ unsigned long dataCnt = 0;
 unsigned long noDataCnt = 0;
 
 struct imuDatum {
-    float rollF = 0.0;
+    float  rollF = 0.0;
     float pitchF = 0.0;
     float yawF = 0.0;
     float ax;
@@ -76,12 +78,12 @@ struct imuDatum {
     float gx;
     float gy;
     float gz;
-    float rollAccel;
-    float pitchAccel;
+    float accelMag;
+    float gyroMag;
     float alt;
     float ias;
     float imuTemp;
-}; 
+};
 
 typedef struct {
   int16_t x;
@@ -133,14 +135,14 @@ void setupTFT() {
 
     // 4. Fire up the chip using its native resolution profile (240x320 tracking layout)
 
-    tft.init(240, 320);           
+    tft.init(240, 320);
     tft.setRotation(2);            // 0 = Portrait, 1 = Landscape
     tft.invertDisplay(true);       // Inverts the panel grid to make colors display normally
 
     // 5. Apply the mandatory 20-pixel column shifting offset
     // The physical screen is 240x280 centered on a 240x320 memory controller.
     // This custom viewport allocation maps your code cleanly inside the frame.
-    tft.setSPISpeed(40000000); 
+    tft.setSPISpeed(40000000);
 
     // 6. Pull the Backlight HIGH to provide physical panel power
     pinMode(LCD_BL, OUTPUT);
@@ -149,7 +151,7 @@ void setupTFT() {
 
     // 7. Clear the graphics framework and paint to the canvas
     tft.fillScreen(ST77XX_BLACK);
-    
+
     tft.setCursor(15, 50);
     tft.setTextColor(ST77XX_GREEN);
     tft.setTextSize(3);
@@ -233,22 +235,25 @@ void setupIMU() {
 
 //=============================================================================
 void setup() {
+    int tmr = 10;
     // give me time to bring up serial monitor
-    delay(2000);  
-    
+    delay(2000);
+
     Serial.begin(115200);
-    while (!Serial) {
-        delay(10);
+    while (!Serial && tmr > 0) {
+        delay(500);
+        tmr--;
     }
-    
+
+
     delay(250);  // give me time to bring up serial monitor
     Serial.println("serial started");
-    
+
     setupTFT();
     setupIMU();
 
     //---init primary variables: roll, pitch, yaw, heading:
-    
+
 
 
     // tft.init(240,280);
@@ -256,6 +261,34 @@ void setup() {
     delay(100); // Allow sensor to stabilize
     tft.fillScreen(ST77XX_BLACK);
 
+}
+
+
+//=============================================================================
+void getIMUData() {
+    static QMI8658_Data sensorData;
+    lastDatum = currDatum;
+    millisLast = msCnt;
+    msCnt = millis();
+    dt = (float)msCnt - (float)millisLast;
+
+    if(imu.readSensorData(sensorData)) {
+        dataCnt++;
+        currDatum.ax = sensorData.accelX;
+        currDatum.ay = sensorData.accelY;
+        currDatum.az = sensorData.accelZ;
+
+        currDatum.gx = sensorData.gyroX;
+        currDatum.gy = sensorData.gyroY;
+        currDatum.gz = sensorData.gyroZ;
+
+
+        
+
+        currDatum.imuTemp = sensorData.temperature;
+    }
+    else
+        noDataCnt++;
 }
 
 //=============================================================================
@@ -269,15 +302,53 @@ void taskIMU() {
     static float axSqrd = 0;
     static float aySqrd = 0;
     static float azSqrd = 0;
+
     static float gx = 0;
     static float gy = 0;
     static float gz = 0;
+
+    static float axLast = 0;
+    static float ayLast = 0;
+    static float azLast = 0;
+
+    static float gxLast = 0;
+    static float gyLast = 0;
+    static float gzLast = 0;
+
+    static float gxSqrd = 0;
+    static float gySqrd = 0;
+    static float gzSqrd = 0;
+
+    static float gAngX = 0;
+    static float gAngY = 0;
+    static float gAngZ = 0;
+
+    
+    static float gAngXLast = 0;
+    static float gAngYLast = 0;
+    static float gAngZLast = 0;
+
+    static float uFilt_gAngX = 0;
+    static float uFilt_gAngY = 0;
+    static float uFilt_gAngZ = 0;
+
+    static float aAngX = 0;
+    static float aAngY = 0;
+    static float aAngZ = 0;
+
     static float filteredAx = 0;
     static float filteredAy = 0;
     static float filteredAz = 0;
+
     static float filteredGx = 0;
     static float filteredGy = 0;
     static float filteredGz = 0;
+
+    static float aXaZ_mag = 0;
+    static float ayaZ_mag = 0;
+
+    static float rollLast = 0;
+    static float pitchLast = 0;
 
     getIMUData();
 
@@ -296,46 +367,60 @@ void taskIMU() {
 
     filteredGx = alphaF * gx + (1 - alphaF) * filteredGx;
     filteredGy = alphaF * gy + (1 - alphaF) * filteredGy;
-    filteredGz = alphaF * gz + (1 - alphaF) * filteredGz; 
+    filteredGz = alphaF * gz + (1 - alphaF) * filteredGz;
 
 
     axSqrd = filteredAx * filteredAx;
     aySqrd = filteredAy * filteredAy;
     azSqrd = filteredAz * filteredAz;
 
-    currDatum.rollF = atan2(filteredAy, sqrt(axSqrd + azSqrd)) * RAD_TO_DEG;
-    currDatum.pitchF = atan2(-filteredAx, sqrt(aySqrd + azSqrd)) * RAD_TO_DEG;
+    gxSqrd = filteredGx * filteredGx;
+    gySqrd = filteredGy * filteredGy;
+    gzSqrd = filteredGz * filteredGz;
+
+    gAngX = gx * dt + gxLast;
+    gAngY = gy * dt + gyLast;
+    gAngZ = gz * dt + gzLast;
+
+    uFilt_gAngX = gx * dt + gAngX ;
+    uFilt_gAngY = gy * dt + gAngY ;
+    uFilt_gAngZ = gz * dt + gAngZ ;
+
+    aAngX = ax * dt + axLast;
+    aAngY = ay * dt + ayLast;
+    aAngZ = az * dt + azLast;
+
+    aXaZ_mag = sqrt(axSqrd + azSqrd);
+    ayaZ_mag = sqrt(aySqrd + azSqrd);
+
+    currDatum.accelMag = sqrt(axSqrd + aySqrd + azSqrd);
+    currDatum.gyroMag = sqrt(gxSqrd + gySqrd + gzSqrd);
+
+    currDatum.pitchF = -atan(filteredAx/ sqrt(aySqrd + azSqrd)) * RAD_TO_DEG;
+    currDatum.rollF = -atan(-1*filteredAy/ sqrt(axSqrd + azSqrd)) * RAD_TO_DEG;
+
+    // if(az > 0)
+    //     currDatum.pitchF = 180-currDatum.pitchF;
 
     // currDatum.yawF += currDatum.gz * dt;
+
+    gxLast = gx;
+    gyLast = gy;
+    gzLast = gz;
+
+    gAngXLast = gAngX;
+    gAngYLast = gAngY;
+    gAngZLast = gAngZ;
+
+
+    pitchLast = currDatum.pitchF;
+    rollLast  = currDatum.rollF ;
 }
 
-//=============================================================================
-void getIMUData() {
-    static QMI8658_Data sensorData;
-    lastDatum = currDatum;
-    millisLast = msCnt;
-    msCnt = millis();
-    dt = (float)msCnt - (float)millisLast;
-    
-    if(imu.readSensorData(sensorData)) {
-        dataCnt++;
-        currDatum.ax = sensorData.accelX;
-        currDatum.ay = sensorData.accelY;
-        currDatum.az = sensorData.accelZ;
-
-        currDatum.gx = sensorData.gyroX;
-        currDatum.gy = sensorData.gyroY;
-        currDatum.gz = sensorData.gyroZ;
-
-        currDatum.imuTemp = sensorData.temperature;
-    }
-    else
-        noDataCnt++;
-}
 
 //=============================================================================
 void taskSerialOut() {
-    // if(msCnt % 10 == 0){ 
+    // if(msCnt % 10 == 0){
     //     Serial.print(msCnt);
     //     Serial.print(" dt:");
     //     Serial.print(dt);
@@ -343,29 +428,29 @@ void taskSerialOut() {
     //     Serial.print(dataCnt);
     //     Serial.print(" no data:");
     //     Serial.print(noDataCnt);
-    //     // Serial.print(" aX:");
-    //     // Serial.print(currDatum.ax, 2);
-    //     // Serial.print(" aY:");
-    //     // Serial.print(currDatum.ay, 2);
-    //     // Serial.print(" aZ:");
-    //     // Serial.print(currDatum.az, 2);
-    //     // Serial.print(" gX:");
-    //     // Serial.print(currDatum.gx, 2);
-    //     // Serial.print(" gY:");
-    //     // Serial.print(currDatum.gy, 2);
-    //     // Serial.print(" gZ:");
-    //     // Serial.print(currDatum.gz, 2);
+        // Serial.print(" aX:");
+        // Serial.print(currDatum.ax, 2);
+        // Serial.print(" aY:");
+        // Serial.print(currDatum.ay, 2);
+        // Serial.print(" aZ:");
+        // Serial.print(currDatum.az, 2);
+        // Serial.print(" gX:");
+        // Serial.print(currDatum.gx, 2);
+        // Serial.print(" gY:");
+        // Serial.print(currDatum.gy, 2);
+        // Serial.print(" gZ:");
+        // Serial.print(currDatum.gz, 2);
     //     Serial.print(" T:");
     //     Serial.print(currDatum.imuTemp, 1);
-    //     Serial.print(" rollF:");
-    //     Serial.print(currDatum.rollF);
-    //     Serial.print(" pitchF:");
-    //     Serial.print(currDatum.pitchF);
+    // Serial.printf(" accelMag:%06.2f gyroMag:%06.2f", currDatum.accelMag, currDatum.gyroMag);
+    // Serial.printf(" ax:%06.2f ay:%06.2f az:%06.2f", currDatum.ax, currDatum.ay, currDatum.az);
+    Serial.printf(" ax:%06.2f az:%06.2f", currDatum.ax, currDatum.az);
+    // Serial.printf(" gx:%06.2f gy:%06.2f gz:%06.2f", currDatum.gx, currDatum.gy, currDatum.gz);
+    Serial.printf(" rollF:%06.2f pitch:%06.2f\n", currDatum.rollF,  currDatum.pitchF);
     //     // Serial.print(" yawF:");
     //     // Serial.print(currDatum.yawF);
 
 
-    //     Serial.println();
     // }
 }
 
@@ -374,7 +459,10 @@ void taskTFT() {
 
 
     renderBackground();
-    renderPitchLadder(currDatum.pitchF, currDatum.rollF);
+    // renderPitchLadderBox(150, ST77XX_GREEN);
+    // renderPitchLadderBox(100, ST77XX_RED);
+    renderPitchLadderBox(50, ST77XX_YELLOW);
+    // renderPitchLadder(currDatum.pitchF, currDatum.rollF);
     renderRollCircle(currDatum.rollF,  ctRollCircle);
 
     //---copy buffer to actual display
@@ -392,7 +480,7 @@ void renderBackground() {
     static float xmax = 0;
     static uint16_t triangleClr = 0;
 
-    Hr = LCD_WIDTH * tan(currDatum.rollF * DEG_TO_RAD);
+    Hr = LCD_WIDTH * tan(currDatum.rollF * DEG_TO_RAD * .625);
     HrShort = .5 * Hr;
     Hh = (LCD_HEIGHT/2) - (currDatum.pitchF * 1.5) - Hr;
     xmin = LCD_WIDTH/4;
@@ -407,7 +495,7 @@ void renderBackground() {
     cnv0.fillRect(0, 0, 240, Hh, ST77XX_BLUE);
 
     //---ground
-    cnv0.fillRect(0, Hh, 240, 240, ST77XX_ORANGE);   
+    cnv0.fillRect(0, Hh, 240, 240, ST77XX_ORANGE);
 
     cnv0.drawTriangle(0, Hh, LCD_WIDTH, Hh + 2*Hr, LCD_WIDTH, Hh,  ST77XX_WHITE);
 
@@ -434,54 +522,174 @@ void renderBackground() {
 
 }
 
-//=============================================================================
-void renderPitchLadder(int nPitchAng, int nRollAng) { //--pitch tick marks
-    static float Hr = 0;
-    static float HrShort = 0;
+void renderPitchLadderBox(float rungWidth, uint16_t clr ) {
 
-    static float Hh = 0;
-    static float xmin = 0;
-    static float xmax = 0;
-    static float ymin = 0;
-    static float ymax = 0;
+    static float xc = LCD_WIDTH/2;
+    static float yc = LCD_HEIGHT/2;
+
+    static float xl = 0;
+    static float yl = 0;
+    static float xr = 0;
+    static float yr = 0;
+
+    static float Hr = 0;
+    static float r = 0;
+
+    static float xUL = 0;
+    static float yUL = 0;
+
+    static float xUR = 0;
+    static float yUR = 0;
+
+    static float xLL = 0;
+    static float yLL = 0;
+    static float xLR = 0;
+    static float yLR = 0;
+
+    static float phi = 0;
     static float rollRad = 0;
-    static float rungWidthHalf = 0;
-    static uint16_t triangleClr = 0;
 
     rollRad = currDatum.rollF * DEG_TO_RAD;
 
-    Hr = LCD_WIDTH * tan(rollRad);
-    HrShort = .5 * Hr;
-    Hh = (LCD_HEIGHT/2) - (currDatum.pitchF * 1.5) - Hr;
-    rungWidthHalf = LCD_WIDTH/4 *cos(rollRad);
-    xmin = LCD_WIDTH/2 - rungWidthHalf;
-    xmax = LCD_WIDTH/2 + rungWidthHalf;
+    Hr = 100 * sin(currDatum.pitchF * DEG_TO_RAD);  
+    r = sqrt(pow(rungWidth/2, 2) + pow(Hr, 2));  
+    phi = atan( Hr/rungWidth*2);
+    
+    xl = xc - rungWidth/2 * cos(rollRad);
+    xr = xc + rungWidth/2 * cos(rollRad);
 
-    ymin = LCD_HEIGHT/2 +  LCD_HEIGHT/2 * sin(-rollRad);
-    ymax = LCD_HEIGHT/2 + (LCD_HEIGHT/2 * sin(rollRad));
+    yl = yc - rungWidth/2 * sin(rollRad);
+    yr = yc + rungWidth/2 * sin(rollRad);
 
-    if(currDatum.rollF > 0)
-        triangleClr = ST77XX_BLUE;
-    else
-        triangleClr = ST77XX_ORANGE;
+    xUL = xc - (r * cos(phi + rollRad));
+    yUL = yc - (r * sin(phi + rollRad));
+
+    xUR = xc + (r * cos(phi - rollRad));
+    yUR = yc - (r * sin(phi - rollRad));
+    
+    xLR = xc + (r * cos(phi + rollRad));
+    yLR = yc + (r * sin(phi + rollRad));
+    
+    xLL = xc - (r * cos(phi - rollRad));
+    yLL = yc + (r * sin(phi - rollRad));
 
 
-    //---artificial horizon
-    cnv0.drawLine(xmin, ymin, xmax, ymax, ST77XX_YELLOW);
-    cnv0.drawLine(xmin, ymin + 1, xmax, ymax + 1, ST77XX_YELLOW);
+    //==============================================
+    // xUL = xc - (rungWidth/2 * cos(phi + rollRad));
+    // yUL = yc - (rungWidth/2 * sin(phi + rollRad));
 
-    cnv0.drawLine(xmin, ymin - 25, xmax, ymax - 25, ST77XX_YELLOW);
-    cnv0.drawLine(xmin, ymin + 25, xmax, ymax + 25, ST77XX_YELLOW);
-    // cnv0.drawLine(xmin, ymin - 25*sin(rollRad), xmax, ymax - 25*sin(rollRad), ST77XX_YELLOW);
-    // cnv0.drawLine(xmin, ymin + 25*sin(rollRad), xmax, ymax + 25*sin(rollRad), ST77XX_YELLOW);
+    // xUR = xc + (rungWidth/2 * cos(phi - rollRad));
+    // yUR = yc - (rungWidth/2 * sin(phi - rollRad));
+    
+    // xLL = xc - (rungWidth/2 * cos(phi - rollRad));
+    // yLL = yc + (rungWidth/2 * sin(phi - rollRad));
+    
+    // xLR = xc + (rungWidth/2 * cos(phi + rollRad));
+    // yLR = yc + (rungWidth/2 * sin(phi + rollRad));
 
-    // Serial.print(msCnt);
-    // Serial.print(" tan:");
-    // Serial.print(tan(currDatum.rollF * DEG_TO_RAD));
-    // Serial.print(" tan-:");
-    // Serial.print(tan(-currDatum.rollF * DEG_TO_RAD));
-    // Serial.println();
+    cnv0.drawLine(xUL, yUL, xUR, yUR, clr);
+    cnv0.drawLine(xUL, yUL+1, xUR, yUR+1, clr);
+    cnv0.drawLine(xUR, yUR, xLR, yLR, ST77XX_BLACK);
+
+    cnv0.drawLine(xl, yl, xr, yr, ST77XX_BLACK);
+
+    cnv0.drawLine(xLR, yLR, xLL, yLL, clr);
+    cnv0.drawLine(xLR, yLR+1, xLL, yLL+1, clr);
+    cnv0.drawLine(xLL, yLL, xUL, yUL, ST77XX_BLACK);
+
+
 }
+
+
+// void renderPitchLadderBox(int nMaxPitch, float plbW) {
+
+//     static float xc = LCD_WIDTH/2;
+//     static float yc = LCD_HEIGHT/2;
+
+
+//     static float xUL = 0;
+//     static float yUL = 0;
+
+//     static float xUR = 0;
+//     static float yUR = 0;
+
+//     static float xLL = 0;
+//     static float yLL = 0;
+//     static float xLR = 0;
+//     static float yLR = 0;
+
+
+//     xUL = xc - plbW/2;
+//     yUL = yc - nMaxPitch;
+
+//     xUR = xc + plbW/2;
+//     yUR = yc - nMaxPitch;
+    
+//     xLL = xc - plbW/2;
+//     yLL = yc + nMaxPitch;
+    
+//     xLR = xc + plbW/2;
+//     yLR = yc + nMaxPitch;
+
+
+
+//     cnv0.drawLine(xUL, yUL, xUR, yUR, ST77XX_BLACK);
+//     cnv0.drawLine(xUR, yUR, xLR, yLR, ST77XX_BLACK);
+
+//     cnv0.drawLine(xLR, yLR, xLL, yLL, ST77XX_BLACK);
+//     cnv0.drawLine(xLL, yLL, xUL, yUL, ST77XX_BLACK);
+
+
+// }
+
+//=============================================================================
+// void renderPitchLadder(int nPitchAng, int nRollAng) { //--pitch tick marks
+//     static float Hr = 0;
+//     static float HrShort = 0;
+
+//     static float Hh = 0;
+//     static float xmin = 0;
+//     static float xmax = 0;
+//     static float ymin = 0;
+//     static float ymax = 0;
+//     static float rollRad = 0;
+//     static float rungWidthHalf = 0;
+//     static uint16_t triangleClr = 0;
+
+//     rollRad = currDatum.rollF * DEG_TO_RAD;
+
+//     Hr = LCD_WIDTH * tan(rollRad);
+//     HrShort = .5 * Hr;
+//     Hh = (LCD_HEIGHT/2) - (currDatum.pitchF * 1.5) - Hr;
+//     rungWidthHalf = LCD_WIDTH/4 *cos(rollRad);
+//     xmin = LCD_WIDTH/2 - rungWidthHalf;
+//     xmax = LCD_WIDTH/2 + rungWidthHalf;
+
+//     ymin = LCD_HEIGHT/2 +  LCD_HEIGHT/2 * sin(-rollRad);
+//     ymax = LCD_HEIGHT/2 + (LCD_HEIGHT/2 * sin(rollRad));
+
+//     if(currDatum.rollF > 0)
+//         triangleClr = ST77XX_BLUE;
+//     else
+//         triangleClr = ST77XX_ORANGE;
+
+
+//     //---artificial horizon
+//     cnv0.drawLine(xmin, ymin, xmax, ymax, ST77XX_YELLOW);
+//     cnv0.drawLine(xmin, ymin + 1, xmax, ymax + 1, ST77XX_YELLOW);
+
+//     cnv0.drawLine(xmin, ymin - 25, xmax, ymax - 25, ST77XX_YELLOW);
+//     cnv0.drawLine(xmin, ymin + 25, xmax, ymax + 25, ST77XX_YELLOW);
+//     // cnv0.drawLine(xmin, ymin - 25*sin(rollRad), xmax, ymax - 25*sin(rollRad), ST77XX_YELLOW);
+//     // cnv0.drawLine(xmin, ymin + 25*sin(rollRad), xmax, ymax + 25*sin(rollRad), ST77XX_YELLOW);
+
+//     // Serial.print(msCnt);
+//     // Serial.print(" tan:");
+//     // Serial.print(tan(currDatum.rollF * DEG_TO_RAD));
+//     // Serial.print(" tan-:");
+//     // Serial.print(tan(-currDatum.rollF * DEG_TO_RAD));
+//     // Serial.println();
+// }
 
 
 
@@ -556,10 +764,10 @@ void renderRollCircle(int nAngle, circleType c) {
 
   xStartPlus  = c.x + xPlusOff;
   yStartPlus  = c.y + yPlusOff;
-  
+
   xEndMinus = x_end + xMinOff;
   yEndMinus = y_end + yMinOff;
-  
+
   xEndPlus  = x_end + xPlusOff;
   yEndPlus  = y_end + yPlusOff;
 
@@ -589,7 +797,7 @@ void renderRollCircle(int nAngle, circleType c) {
     renderTriangle(x_end, y_end, nAngle, c.r, ROLL_PNTR_LEN, ST77XX_WHITE);
 
     // Serial.println();
-    
+
     x_endLast = x_end;
     y_endLast = y_end;
 }
@@ -602,9 +810,9 @@ void renderTriangle(int16_t xC, int16_t yC, int16_t angle, int16_t r, uint8_t si
     static float x0 = 0;
     static float y0 = 0;
     static float x1 = 0;
-    static float y1 = 0; 
+    static float y1 = 0;
     static float x2 = 0;
-    static float y2 = 0; 
+    static float y2 = 0;
     static float xRoffset = 0;
     static float yRoffset = 0;
     static float angleR = 0;
@@ -686,6 +894,6 @@ void loop() {
     taskIMU();
     taskSerialOut();
     taskTFT();
-    
+
     delay(LOOP_DT); // Read at 100Hz
 }
