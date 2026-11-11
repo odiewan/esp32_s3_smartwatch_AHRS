@@ -461,7 +461,8 @@ void taskTFT() {
     renderBackground();
     // renderPitchLadderBox(150, ST77XX_GREEN);
     // renderPitchLadderBox(100, ST77XX_RED);
-    renderPitchLadderBox(50, ST77XX_YELLOW);
+    // renderPitchLadderBox(50, ST77XX_YELLOW);
+    renderPitchLadderRung(50, 20, ST77XX_WHITE);
     // renderPitchLadder(currDatum.pitchF, currDatum.rollF);
     renderRollCircle(currDatum.rollF,  ctRollCircle);
 
@@ -519,6 +520,80 @@ void renderBackground() {
     // Serial.print(" tan-:");
     // Serial.print(tan(-nRollAng * DEG_TO_RAD));
     // Serial.println();
+
+}
+
+void renderPitchLadderRung(float rungWidth, float pitch, uint16_t clr ) {
+
+    static float xc = LCD_WIDTH/2;
+    static float yc = LCD_HEIGHT/2;
+
+    static float xl = 0;
+    static float yl = 0;
+    static float xr = 0;
+    static float yr = 0;
+
+    static float Hr = 0;
+    static float r = 0;
+
+    static float xUL = 0;
+    static float yUL = 0;
+
+    static float xUR = 0;
+    static float yUR = 0;
+
+    static float xLL = 0;
+    static float yLL = 0;
+    static float xLR = 0;
+    static float yLR = 0;
+
+    static float phi = 0;
+    static float rollRad = 0;
+    static float pitchRad = 0;
+
+    rollRad = currDatum.rollF * DEG_TO_RAD;
+    pitchRad = pitch * DEG_TO_RAD;
+    
+
+    Hr = 100 * sin(pitchRad);  
+    r = sqrt(pow(rungWidth/2, 2) + pow(Hr, 2));  
+    phi = atan( Hr/rungWidth*2);
+    
+    xl = xc - rungWidth/2 * cos(rollRad);
+    xr = xc + rungWidth/2 * cos(rollRad);
+
+    yl = yc - rungWidth/2 * sin(rollRad);
+    yr = yc + rungWidth/2 * sin(rollRad);
+
+    xUL = xc - (r * cos(phi + rollRad));
+    yUL = yc - (r * sin(phi + rollRad));
+
+    xUR = xc + (r * cos(phi - rollRad));
+    yUR = yc - (r * sin(phi - rollRad));
+    
+    xLR = xc + (r * cos(phi + rollRad));
+    yLR = yc + (r * sin(phi + rollRad));
+    
+    xLL = xc - (r * cos(phi - rollRad));
+    yLL = yc + (r * sin(phi - rollRad));
+
+    cnv0.setTextColor(clr);
+    cnv0.setTextSize(1);
+
+    cnv0.setCursor(xUL - 10, yUL);
+    cnv0.print((int)pitch);
+    cnv0.drawLine(xUL, yUL, xUR, yUR, clr);
+    cnv0.drawLine(xUL, yUL+1, xUR, yUR+1, clr);
+    // cnv0.drawLine(xUR, yUR, xLR, yLR, ST77XX_BLACK);
+
+    cnv0.drawLine(xl, yl-1, xr, yr-1, clr);
+    cnv0.drawLine(xl, yl, xr, yr, clr);
+    cnv0.drawLine(xl, yl+1, xr, yr+1, clr);
+
+    cnv0.drawLine(xLR, yLR, xLL, yLL, clr);
+    cnv0.drawLine(xLR, yLR+1, xLL, yLL+1, clr);
+    // cnv0.drawLine(xLL, yLL, xUL, yUL, ST77XX_BLACK);
+
 
 }
 
